@@ -47,12 +47,28 @@ def setup_logging(log_path: Path) -> None:
     root.setLevel(logging.INFO)
     if any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         return
-    stream = logging.StreamHandler(sys.stdout)
-    stream.setFormatter(fmt)
-    root.addHandler(stream)
-    file_h = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    file_h.setFormatter(fmt)
-    root.addHandler(file_h)
+    # The file handler is the only one we truly need at runtime; if it
+    # fails for any reason we still want the rest of startup to keep
+    # running rather than crashing the whole process.
+    try:
+        file_h = RotatingFileHandler(
+            log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_h.setFormatter(fmt)
+        root.addHandler(file_h)
+    except Exception:
+        pass
+    # The stream handler is best-effort: when PyInstaller builds with
+    # --noconsole on Windows, sys.stdout is None unless something else
+    # patched it. Skip the handler entirely in that case so logging
+    # never tries to write to None and crashes startup.
+    if sys.stdout is not None:
+        try:
+            stream = logging.StreamHandler(sys.stdout)
+            stream.setFormatter(fmt)
+            root.addHandler(stream)
+        except Exception:
+            pass
     # uvicorn pumps too many access logs at INFO; tame them.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
@@ -124,6 +140,14 @@ class Worker:
             port=lockfile.LOCK_PORT,
             log_level="warning",
             lifespan="off",
+            # On Windows --noconsole builds, uvicorn's default logging
+            # config tries to attach a StreamHandler to sys.stdout — which
+            # is None — and crashes the server before it can bind. Pass
+            # log_config=None to suppress uvicorn's own setup; our
+            # setup_logging() above already routes everything to the
+            # rotating file logger in %APPDATA%\SavaariBot\.
+            log_config=None,
+            access_log=False,
         )
         self._server = uvicorn.Server(cfg)
         server_task = asyncio.create_task(self._server.serve(), name="uvicorn")
