@@ -46,7 +46,11 @@ hiddenimports += [
 ]
 
 a = Analysis(
-    ["savaari_bot/main.py"],
+    # NOTE: don't point this at savaari_bot/main.py — PyInstaller would
+    # treat it as a loose script, not a package member, and the relative
+    # imports inside the package would crash with
+    # "attempted relative import with no known parent package".
+    ["run_savaari_bot.py"],
     pathex=["."],
     binaries=[],
     datas=[],
