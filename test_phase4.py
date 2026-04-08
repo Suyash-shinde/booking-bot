@@ -241,7 +241,11 @@ async def test_best_car_busy_until_filters():
 
 # ---------- end-to-end through notifier ----------
 
-async def test_notifier_includes_deadhead_in_alert():
+async def test_notifier_runs_deadhead_pipeline():
+    """Even though the rendered Telegram body is plain, the deadhead
+    pipeline must still run because (a) it adjusts the profit used by
+    the fare floor and (b) it picks the car that gets persisted on the
+    alerts row for auto-relocate on confirm."""
     state, conn = fresh()
     fleet.upsert_car(conn, label="KA-1", car_type_id="3",
                      location_text="Mumbai", location_lat=MUMBAI.lat, location_lng=MUMBAI.lng)
@@ -260,11 +264,11 @@ async def test_notifier_includes_deadhead_in_alert():
     }
     await n.alert_new(b)
     assert len(n.bot.sent) == 1
-    text = n.bot.sent[0]["text"]
-    assert "Best car: <b>KA-1</b>" in text, text
-    assert "deadhead" in text, text
-    assert "Net ≈" in text
-    print("ok  notifier deadhead")
+    # Picked car was stored on the alert row — that's what auto-relocate
+    # consumes when the user taps Confirm.
+    row = db.get_alert(conn, "1")
+    assert row is not None and row["picked_car_id"] == 1, row
+    print("ok  notifier runs deadhead pipeline")
 
 
 async def test_deadhead_can_push_below_floor():
@@ -324,13 +328,14 @@ async def test_disabled_deadhead_skips_geocoder():
 async def main():
     test_apply_deadhead_subtracts_only_fuel()
     test_apply_deadhead_uses_per_car_fuel_override()
+    # (test_notifier_includes_deadhead_in_alert renamed → test_notifier_runs_deadhead_pipeline)
     test_fleet_crud_round_trip()
     await test_best_car_picks_closest_routed()
     await test_best_car_falls_back_to_any_when_no_type_match()
     await test_best_car_returns_none_when_fleet_empty()
     await test_best_car_geocodes_location_text_on_demand()
     await test_best_car_busy_until_filters()
-    await test_notifier_includes_deadhead_in_alert()
+    await test_notifier_runs_deadhead_pipeline()
     await test_deadhead_can_push_below_floor()
     await test_disabled_deadhead_skips_geocoder()
     print()

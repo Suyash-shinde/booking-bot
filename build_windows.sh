@@ -52,23 +52,29 @@ fi
 echo "==> Pulling $IMAGE (cached after first run)"
 $DOCKER pull "$IMAGE"
 
-echo "==> Cleaning previous build artifacts"
-rm -rf build/ dist/ __pycache__/ savaari_bot/__pycache__/
-
-# The image's Wine prefix already has Python 3.12 installed.
-# We pip-install our deps + pyinstaller into that Python, then run
-# PyInstaller against our spec.
+# The image's Wine prefix already has Python 3.12 installed. We do
+# everything inside the container as root: cleanup AND build. Doing the
+# cleanup outside (as the host user) breaks because the previous build
+# left root-owned files in build/ and dist/.
 #
-# `--user 0:0` keeps file ownership sane on the bind mount (Wine doesn't
-# care about uid/gid; the host then owns the resulting dist/).
+# At the end we also chown the outputs back to the calling user (best
+# effort) so you can delete or move them without sudo.
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
 $DOCKER run --rm \
     --user 0:0 \
     -e SPEC="$SPEC" \
+    -e HOST_UID="$HOST_UID" \
+    -e HOST_GID="$HOST_GID" \
     -v "$PROJECT_DIR:/src" \
     -w /src \
     "$IMAGE" \
     sh -c '
         set -e
+        echo "--- cleaning previous build artifacts ---"
+        rm -rf build/ dist/ __pycache__/ savaari_bot/__pycache__/
+        echo
         echo "--- python version inside wine ---"
         wine python --version
         echo
@@ -78,6 +84,9 @@ $DOCKER run --rm \
         echo
         echo "--- running pyinstaller on $SPEC ---"
         wine python -m PyInstaller "$SPEC" --noconfirm --clean
+        echo
+        echo "--- handing build artifacts back to host user $HOST_UID:$HOST_GID ---"
+        chown -R "$HOST_UID:$HOST_GID" build/ dist/ savaari_bot/__pycache__/ 2>/dev/null || true
     '
 
 echo

@@ -266,9 +266,10 @@ async def test_alert_includes_grab_hint():
         "package_kms": "150", "exclusions": "Toll",
     }
     await n.alert_new(b)
-    text = n.bot.sent[0]["text"]
-    # Final fare in seeded data is 3500; total_amt above is 3700 > p50.
-    assert "GRAB" in text or "OK" in text, text
+    # Hint computation still runs (and feeds the suppress-below-p50
+    # filter), but the rendered Telegram body no longer carries the
+    # GRAB/OK badge — keep the message plain.
+    assert len(n.bot.sent) == 1
     print("ok  alert grab hint")
 
 
@@ -323,9 +324,10 @@ async def test_alert_not_suppressed_with_flag_off():
         "package_kms": "150", "exclusions": "Toll",
     }
     await n.alert_new(b)
+    # With suppress_below_p50=False the alert still goes out even though
+    # the model says WAIT. Annotations are no longer rendered, so we
+    # only assert the alert reached the bot.
     assert len(n.bot.sent) == 1
-    text = n.bot.sent[0]["text"]
-    assert "WAIT" in text, text  # still annotated, just not suppressed
     print("ok  alert not suppressed when flag off")
 
 
@@ -347,8 +349,8 @@ async def test_unknown_route_renders_no_history_yet():
         "vendor_cost": "3000", "package_kms": "100", "exclusions": "Toll",
     }
     await n.alert_new(b)
-    text = n.bot.sent[0]["text"]
-    assert "no history" in text
+    # Unknown-route case used to render "📈 no history" — now plain.
+    assert len(n.bot.sent) == 1
     print("ok  unknown route hint")
 
 

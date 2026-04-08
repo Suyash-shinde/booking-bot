@@ -165,9 +165,9 @@ async def test_net_floor_allows_high_net():
         "package_kms": "200",
     }
     await n.alert_new(b)
-    assert len(n.bot.sent) == 1
-    text = n.bot.sent[0]["text"]
-    assert "Net ≈" in text
+    # Filtering still uses the net profit; the rendered alert no longer
+    # echoes the math (we keep the message body plain).
+    assert len(n.bot.sent) == 1, "high-net booking should pass the floor"
     print("ok  net floor allows high net")
 
 

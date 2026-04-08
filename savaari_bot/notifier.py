@@ -99,76 +99,60 @@ def _vendor_cost(b: dict[str, Any]) -> int | None:
 def _format_alert(
     b: dict[str, Any],
     *,
-    header: str = "🚖 New booking",
+    title: str = "New Booking Alert! 🚖",
+    # Phase 2-6 annotation params accepted but ignored. The features
+    # still RUN — profit drives the fare floor, deadhead drives best-car
+    # tracking, eligibility/escalation drive optional suppression — they
+    # just don't get rendered into the Telegram body. Keeping the
+    # parameters here means call sites don't break.
     profit: ProfitEstimate | None = None,
     eligibility: Eligibility | None = None,
     car_pick: CarPick | None = None,
     competition: CompetitionTag | None = None,
     escalation: EscalationHint | None = None,
 ) -> str:
-    # Headline = vendor cost. Fall back to gross fare only when Savaari
-    # didn't tell us the vendor cost (rare).
-    headline = _vendor_cost(b)
-    if headline is None:
-        headline = _fare(b)
-    headline_str = f"₹{headline:,}" if headline is not None else "—"
+    """Plain notifier-style message that mirrors the original Chrome
+    extension's format."""
+    booking_id = _esc(b.get("booking_id"))
     car = _esc(b.get("car_type"))
     trip_type = _esc(b.get("trip_type_name"))
-    itin = _esc(b.get("itinerary")).replace("&amp;rarr;", "→")
-    start = f"{_esc(b.get('start_date'))} {_esc(b.get('start_time'))}".strip()
+    num_days = db._to_int(b.get("num_days")) or 0
+    package_kms = db._to_int(b.get("package_kms")) or 0
+    if num_days or package_kms:
+        bits = []
+        if num_days:
+            bits.append(f"{num_days} day{'s' if num_days != 1 else ''}")
+        if package_kms:
+            bits.append(f"{package_kms} km")
+        trip_type = f"{trip_type} ({', '.join(bits)})" if trip_type else ", ".join(bits)
+    itin = _esc(b.get("itinerary")).replace("&amp;rarr;", "→").replace("&rarr;", "→")
+    start_date = _esc(b.get("start_date"))
+    start_time = _esc(b.get("start_time"))
+    when = f"{start_date} at {start_time}".strip()
     pickup = _esc(b.get("pick_loc"))
     drop = _esc(b.get("drop_loc"))
-    auto_cancel = _esc(b.get("auto_cancel_at"))
-    has_responded = _esc(b.get("has_responded"))
+
+    fare = _vendor_cost(b)
+    if fare is None:
+        fare = _fare(b)
+    fare_str = f"₹{fare:,}" if fare is not None else "—"
+
+    exclusions = _esc(b.get("exclusions"))
 
     lines = [
-        f"<b>{header}</b>  {headline_str}",
-        f"{itin}",
-        f"{car} · {trip_type}",
-        f"Pickup: {start}",
+        f"<b>{title}</b>",
+        f"Booking ID: {booking_id}",
+        f"Trip Type: {trip_type}",
+        f"Car: {car}",
+        f"Itinerary: {itin}",
+        f"Start: {when}",
+        f"Pickup: {pickup}",
+        f"Drop: {drop}",
+        f"Fare: {fare_str}",
     ]
-    if profit is not None:
-        # The profit summary is the headline number for decision-making, so
-        # render it bold and right after the trip basics.
-        sign = "⚠️ " if profit.net < 0 else ""
-        lines.append(f"<b>{sign}{html.escape(profit.short())}</b>")
-    if eligibility is not None and eligibility.known:
-        if eligibility.eligible_count > 0:
-            lines.append(f"🚗 Eligible cars: <b>{eligibility.eligible_count}</b>")
-        else:
-            lines.append("🚗 <i>No eligible cars right now</i>")
-    if car_pick is not None:
-        car = car_pick.car
-        if car_pick.distance_km is None:
-            lines.append(f"🛣 Best car: <b>{_esc(car.label)}</b> (distance unknown)")
-        else:
-            tag = "~" if car_pick.estimated else ""
-            lines.append(
-                f"🛣 Best car: <b>{_esc(car.label)}</b> "
-                f"— deadhead {tag}{car_pick.distance_km:.0f} km"
-            )
-    if competition is not None:
-        lines.append(competition.short())
-    if escalation is not None:
-        lines.append(escalation.short())
-    if pickup:
-        lines.append(f"From: {pickup}")
-    if drop:
-        lines.append(f"To: {drop}")
-    if auto_cancel:
-        lines.append(f"<i>Auto-cancel: {auto_cancel}  ·  responded: {has_responded}</i>")
+    if exclusions:
+        lines.append(f"Not Included: {exclusions}")
     return "\n".join(lines)
-
-
-def _alert_buttons(broadcast_id: str, amount: int | None) -> list[list[tuple[str, str]]]:
-    """Confirm/Skip inline keyboard. The amount on the Confirm button is
-    the *vendor cost* (what the user actually receives), matching the
-    headline in the message body."""
-    amount_str = f"₹{amount:,}" if amount is not None else "current rate"
-    return [[
-        (f"✅ Confirm {amount_str}", f"{PREFIX_CONFIRM}{broadcast_id}"),
-        ("⏭ Skip", f"{PREFIX_SKIP}{broadcast_id}"),
-    ]]
 
 
 class TelegramNotifier:
@@ -257,17 +241,18 @@ class TelegramNotifier:
             competition = self._maybe_competition_tag(b)
             text = _format_alert(
                 b,
-                header="🚖 New booking",
+                title="New Booking Alert! 🚖",
                 profit=profit,
                 eligibility=eligibility,
                 car_pick=car_pick,
                 competition=competition,
                 escalation=escalation,
             )
-            # Confirm button shows the vendor cost (matches the headline).
-            buttons = _alert_buttons(bid, _vendor_cost(b) or fare)
+            # Notifier-only mode: no inline keyboard. The bot is plain
+            # send-and-forget; the user reads the message and acts in
+            # the Savaari dashboard.
             try:
-                msg = await self.bot.send_message(text, buttons=buttons)
+                msg = await self.bot.send_message(text)
             except Exception:
                 log.exception("send_message failed for broadcast %s", bid)
                 return
@@ -427,25 +412,31 @@ class TelegramNotifier:
         eligibility = await self._maybe_check_eligibility(b)
         competition = self._maybe_competition_tag(b)
         escalation = self._maybe_escalation_hint(b, new)
-        # Header just says "Price up" — the new vendor cost is in the
-        # body's headline line so we don't need to repeat it here.
         text = _format_alert(
             b,
-            header="📈 Price up",
+            title="Price Increased! 📈",
             profit=profit,
             eligibility=eligibility,
             car_pick=car_pick,
             competition=competition,
             escalation=escalation,
         )
-        buttons = _alert_buttons(bid, _vendor_cost(b) or new)
+        # Notifier-only mode: send a SEPARATE message for the bump (matching
+        # the original Chrome extension behaviour) instead of editing the
+        # original message in place. The user wants to be loudly notified
+        # when a rate goes up — an in-place edit is too subtle.
         try:
-            await self.bot.edit_message_text(
-                row["chat_id"], int(row["message_id"]), text, buttons=buttons
-            )
+            msg = await self.bot.send_message(text)
             db.update_alert_fare(self.conn, bid, new)
+            # Track the new message id so any subsequent bump on the same
+            # broadcast can be edited if we ever switch back to in-place
+            # edits later. Doesn't affect current behaviour.
+            self.conn.execute(
+                "UPDATE alerts SET message_id=?, sent_at=? WHERE broadcast_id=?",
+                (int(msg["message_id"]), _now(), bid),
+            )
         except Exception:
-            log.exception("edit_message_text failed for broadcast %s", bid)
+            log.exception("send_message failed for price-up on broadcast %s", bid)
 
     # ---------- text command dispatch ----------
 

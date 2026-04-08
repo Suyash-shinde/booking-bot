@@ -89,11 +89,10 @@ async def test_alert_new_sends_message():
     await n.alert_new(SAMPLE)
     assert len(bot.sent) == 1, "expected one sendMessage"
     msg = bot.sent[0]
-    # Headline is now vendor_cost (₹3,187), not gross fare (₹3,985).
+    # Plain notifier-only mode: vendor_cost shown as the fare line, no
+    # inline keyboard at all.
     assert "Mumbai" in msg["text"] and "₹3,187" in msg["text"], msg["text"]
-    # Confirm button label also shows vendor cost.
-    assert "Confirm ₹3,187" in msg["buttons"][0][0][0]
-    assert msg["buttons"][0][0][1] == "c:15123456"
+    assert msg["buttons"] is None, "notifier-only mode should send no buttons"
     row = db.get_alert(conn, "15123456")
     assert row and row["status"] == "pending"
     print("ok  alert_new")
@@ -196,7 +195,10 @@ async def test_unknown_chat_rejected():
     print("ok  unknown chat rejected")
 
 
-async def test_price_up_edits_in_place():
+async def test_price_up_sends_new_message():
+    """Notifier-only mode: a price bump produces a SECOND send_message
+    (matching the original Chrome extension behaviour) instead of editing
+    the original message in place. The user wants to be loudly notified."""
     state, conn = fresh_state_and_db()
     bot, sav = FakeBot(), FakeSavaari()
     n = TelegramNotifier(state, conn, bot, sav)
@@ -204,7 +206,10 @@ async def test_price_up_edits_in_place():
     bumped = dict(SAMPLE)
     bumped["total_amt"] = "4365"
     await n.alert_price_up(bumped, 3985, 4365)
-    assert any("Price up" in e["text"] for e in bot.edited), bot.edited
+    # Two sends total: original alert + price-up alert.
+    assert len(bot.sent) == 2, f"expected 2 sends, got {len(bot.sent)}"
+    assert "Price Increased" in bot.sent[1]["text"], bot.sent[1]["text"]
+    assert bot.sent[1]["buttons"] is None
     row = db.get_alert(conn, "15123456")
     assert row["last_fare"] == 4365
     print("ok  price_up")
@@ -219,7 +224,7 @@ async def main():
     await test_double_tap_atomic()
     await test_skip()
     await test_unknown_chat_rejected()
-    await test_price_up_edits_in_place()
+    await test_price_up_sends_new_message()
     print()
     print("ALL OK")
 

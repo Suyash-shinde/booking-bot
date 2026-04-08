@@ -130,9 +130,9 @@ async def test_annotate_only_passes_zero_through():
     cache = AvailabilityCache(sav, ttl_s=60.0)
     n = TelegramNotifier(state, conn, FakeBot(), sav, availability=cache)
     await n.alert_new(SAMPLE)
+    # Annotate-only should never suppress; the rendered message no longer
+    # carries the eligibility text but the alert still goes out.
     assert len(n.bot.sent) == 1, "annotate-only should never suppress"
-    text = n.bot.sent[0]["text"]
-    assert "No eligible cars right now" in text, text
     print("ok  annotate-only zero passes")
 
 
@@ -154,9 +154,9 @@ async def test_gate_passes_nonzero_and_annotates():
     cache = AvailabilityCache(sav, ttl_s=60.0)
     n = TelegramNotifier(state, conn, FakeBot(), sav, availability=cache)
     await n.alert_new(SAMPLE)
+    # The gate let it through; rendered text is plain (no eligible-cars
+    # annotation any more).
     assert len(n.bot.sent) == 1
-    assert "Eligible cars" in n.bot.sent[0]["text"]
-    assert "<b>2</b>" in n.bot.sent[0]["text"]
     print("ok  gate pass nonzero")
 
 
