@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Build SavaariBot.exe from Linux using Docker + Wine + Windows Python.
 #
-# Output: dist/SavaariBot.exe (single-file, --noconsole)
+# Usage:
+#   ./build_windows.sh           # production build (no console window)
+#   ./build_windows.sh debug     # debug build with a visible console
+#                                # so you can see Python tracebacks
+#
+# Output: dist/SavaariBot.exe         (production)
+#         dist/SavaariBot-debug.exe   (debug)
 #
 # Why Docker: PyInstaller doesn't cross-compile. The image bundles a real
 # Windows Python interpreter under Wine and runs PyInstaller exactly as it
@@ -12,6 +18,22 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+MODE="${1:-prod}"
+case "$MODE" in
+    prod)
+        SPEC="SavaariBot.spec"
+        OUT="dist/SavaariBot.exe"
+        ;;
+    debug)
+        SPEC="SavaariBot-debug.spec"
+        OUT="dist/SavaariBot-debug.exe"
+        ;;
+    *)
+        echo "Usage: $0 [prod|debug]" >&2
+        exit 1
+        ;;
+esac
 
 IMAGE="tobix/pywine:3.12"
 PROJECT_DIR="$(pwd)"
@@ -41,6 +63,7 @@ rm -rf build/ dist/ __pycache__/ savaari_bot/__pycache__/
 # care about uid/gid; the host then owns the resulting dist/).
 $DOCKER run --rm \
     --user 0:0 \
+    -e SPEC="$SPEC" \
     -v "$PROJECT_DIR:/src" \
     -w /src \
     "$IMAGE" \
@@ -53,16 +76,16 @@ $DOCKER run --rm \
         wine python -m pip install --upgrade pip
         wine python -m pip install -r requirements.txt pyinstaller
         echo
-        echo "--- running pyinstaller ---"
-        wine python -m PyInstaller SavaariBot.spec --noconfirm --clean
+        echo "--- running pyinstaller on $SPEC ---"
+        wine python -m PyInstaller "$SPEC" --noconfirm --clean
     '
 
 echo
-if [ -f dist/SavaariBot.exe ]; then
-    SIZE=$(du -h dist/SavaariBot.exe | cut -f1)
-    echo "==> SUCCESS: dist/SavaariBot.exe  ($SIZE)"
-    file dist/SavaariBot.exe
+if [ -f "$OUT" ]; then
+    SIZE=$(du -h "$OUT" | cut -f1)
+    echo "==> SUCCESS: $OUT  ($SIZE)"
+    file "$OUT"
 else
-    echo "==> FAILED: dist/SavaariBot.exe was not produced"
+    echo "==> FAILED: $OUT was not produced"
     exit 1
 fi
